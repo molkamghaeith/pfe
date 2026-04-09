@@ -19,6 +19,8 @@ from .serializers import WebsiteSerializer
 from accounts.models import GoogleAnalyticsToken
 from urllib.parse import urlparse
 from datetime import date, timedelta  # ✅ AJOUTÉ
+from .seo_agent import get_seo_recommendations
+from .models import Website, Analysis 
 
 
 oauth_states = {}
@@ -300,3 +302,31 @@ def get_search_console_data(request):
         })
 
     return JsonResponse(results, safe=False)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_seo_recommendations_api(request, website_id):
+    """API pour obtenir les recommandations SEO pour un site"""
+    try:
+        website = Website.objects.get(id=website_id, user=request.user)
+    except Website.DoesNotExist:
+        return Response({"error": "Site non trouvé"}, status=404)
+    
+    # Récupérer les données GA et GSC
+    ga_data = []
+    gsc_data = []
+    
+    # Récupérer les dernières analyses GA - CORRECTION DES CHAMPS
+    analyses = Analysis.objects.filter(website=website).order_by('-date_analyse')[:30]
+    for analysis in analyses:
+        ga_data.append({
+            'users': analysis.trafic,  # ✅ CORRIGÉ: 'trafic' au lieu de 'trafic_organique'
+            'sessions': analysis.clics,  # ✅ CORRIGÉ
+            'bounceRate': 0  # Valeur par défaut
+        })
+    
+    # Exécuter l'agent SEO
+    recommendations = get_seo_recommendations(website.url, ga_data, gsc_data)
+    
+    return Response(recommendations)

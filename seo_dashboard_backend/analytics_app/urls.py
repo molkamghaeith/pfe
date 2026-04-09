@@ -8,6 +8,7 @@ from .views import (
     get_ga_data,
     verify_ga_property_url,
     get_search_console_data,
+    get_seo_recommendations_api
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path("google-analytics/data/<str:property_id>/", get_ga_data),
     path("google-analytics/verify-url/", verify_ga_property_url),
     path("search-console/data/", get_search_console_data),
+    path("recommendations/<int:website_id>/", get_seo_recommendations_api),
 ]

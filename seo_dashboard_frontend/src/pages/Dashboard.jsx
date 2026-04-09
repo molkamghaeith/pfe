@@ -11,20 +11,22 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { theme } from "../styles/theme";
-import PeriodSelector from "../components/PeriodSelector"; // ✅ AJOUT
+import PeriodSelector from "../components/PeriodSelector";
+import SEORecommendations from "../components/SEORecommendations"; // ✅ AJOUT
 
 function Dashboard() {
   const [url, setUrl] = useState("");
   const [nomSite, setNomSite] = useState("");
   const [sites, setSites] = useState([]);
+  const [currentWebsiteId, setCurrentWebsiteId] = useState(null); 
   const [properties, setProperties] = useState([]);
   const [gaData, setGaData] = useState([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState("");
   const [selectedPropertyName, setSelectedPropertyName] = useState("");
   const [seoData, setSeoData] = useState([]);
-  const [loading, setLoading] = useState(false); // ✅ AJOUT
-  const [currentPeriod, setCurrentPeriod] = useState("last30Days"); // ✅ AJOUT
-  const [currentSiteUrl, setCurrentSiteUrl] = useState(""); // ✅ AJOUT
+  const [loading, setLoading] = useState(false);
+  const [currentPeriod, setCurrentPeriod] = useState("last30Days");
+  const [currentSiteUrl, setCurrentSiteUrl] = useState("");
 
   const token = localStorage.getItem("access");
 
@@ -56,14 +58,14 @@ function Dashboard() {
 
   // ================= FORMAT GRAPH =================
   const formattedChartData = [...gaData]
-  .sort((a, b) => a.date.localeCompare(b.date)) // ✅ Tri par date originale
-  .map((item) => ({
-    ...item,
-    date: `${item.date.slice(6, 8)}/${item.date.slice(4, 6)}`, // formaté pour affichage
-    users: Number(item.users),
-    sessions: Number(item.sessions),
-    views: Number(item.views),
-  }));
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((item) => ({
+      ...item,
+      date: `${item.date.slice(6, 8)}/${item.date.slice(4, 6)}`,
+      users: Number(item.users),
+      sessions: Number(item.sessions),
+      views: Number(item.views),
+    }));
 
   // ================= FETCH =================
   const fetchSites = async () => {
@@ -80,7 +82,6 @@ function Dashboard() {
     setProperties(res.data);
   };
 
-  // ✅ MODIFIÉ : accepte les dates en paramètre
   const fetchGAData = async (propertyId, startDate = null, endDate = null) => {
     setLoading(true);
     try {
@@ -162,7 +163,6 @@ function Dashboard() {
     setSelectedPropertyName(prop?.display_name || "");
   };
 
-  // ✅ NOUVEAU : gère le changement de période
   const handlePeriodChange = (startDate, endDate, periodKey) => {
     setCurrentPeriod(periodKey);
     if (selectedPropertyId) {
@@ -173,50 +173,55 @@ function Dashboard() {
     }
   };
 
-  // ✅ NOUVEAU : gère le clic sur un site
   const handleSiteSelect = (site) => {
-    setSelectedPropertyId(site.property_id);
-    setSelectedPropertyName(site.property_name);
-    setCurrentSiteUrl(site.url);
-    fetchGAData(site.property_id);
-    fetchSearchConsole(site.url);
-  };
-
-  // ================= STYLES =================
- // ================= STYLES (CORRIGÉS) =================
-const styles = {
-  searchContainer: {
-    background: "#fff",
-    padding: "20px",
-    borderRadius: "12px",
-    marginTop: "20px",
-    boxShadow: "0 6px 18px rgba(0,0,0,0.08)",
-    overflowX: "auto", // ✅ permet le scroll horizontal si nécessaire
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: "500px", // ✅ largeur minimale pour éviter l'écrasement
-  },
-  th: {
-    background: "#f3f4f6",
-    padding: "12px",
-    textAlign: "left",
-    fontWeight: "bold",
-    borderBottom: "2px solid #e5e7eb",
-  },
-  td: {
-    padding: "12px",
-    borderBottom: "1px solid #eee",
-    textAlign: "left",
-  },
-  // ✅ AJOUT : largeurs spécifiques pour chaque colonne
-  colKeyword: { width: "40%" },
-  colClicks: { width: "15%" },
-  colImpressions: { width: "15%" },
-  colCtr: { width: "15%" },
-  colPosition: { width: "15%" },
+  setSelectedPropertyId(site.property_id);
+  setSelectedPropertyName(site.property_name);
+  setCurrentSiteUrl(site.url);
+  setCurrentWebsiteId(site.id);  // ✅ AJOUTER : stocke l'ID du site pour l'agent SEO
+  fetchGAData(site.property_id);
+  fetchSearchConsole(site.url);
 };
+  // ================= STYLES =================
+  const styles = {
+    searchContainer: {
+      background: "#fff",
+      padding: "20px",
+      borderRadius: "12px",
+      marginTop: "20px",
+      boxShadow: "0 6px 18px rgba(0,0,0,0.08)",
+      overflowX: "auto",
+    },
+    table: {
+      width: "100%",
+      borderCollapse: "collapse",
+      minWidth: "500px",
+    },
+    th: {
+      background: "#f3f4f6",
+      padding: "12px",
+      textAlign: "left",
+      fontWeight: "bold",
+      borderBottom: "2px solid #e5e7eb",
+    },
+    td: {
+      padding: "12px",
+      borderBottom: "1px solid #eee",
+      textAlign: "left",
+    },
+    colKeyword: { width: "40%" },
+    colClicks: { width: "15%" },
+    colImpressions: { width: "15%" },
+    colCtr: { width: "15%" },
+    colPosition: { width: "15%" },
+    siteButton: {
+      marginLeft: "10px",
+      padding: "5px 10px",
+      background: "#e5e7eb",
+      border: "none",
+      borderRadius: "6px",
+      cursor: "pointer",
+    },
+  };
 
   return (
     <div style={theme.page}>
@@ -319,37 +324,45 @@ const styles = {
           )}
 
           {!loading && seoData.length > 0 && (
-  <table style={styles.table}>
-    <colgroup>
-      <col style={styles.colKeyword} />
-      <col style={styles.colClicks} />
-      <col style={styles.colImpressions} />
-      <col style={styles.colCtr} />
-      <col style={styles.colPosition} />
-    </colgroup>
-    <thead>
-      <tr>
-        <th style={styles.th}>Mot-clé</th>
-        <th style={styles.th}>Clics</th>
-        <th style={styles.th}>Impressions</th>
-        <th style={styles.th}>CTR</th>
-        <th style={styles.th}>Position</th>
-      </tr>
-    </thead>
-    <tbody>
-      {seoData.map((row, i) => (
-        <tr key={i}>
-          <td style={styles.td}>{row.keyword}</td>
-          <td style={styles.td}>{row.clicks}</td>
-          <td style={styles.td}>{row.impressions}</td>
-          <td style={styles.td}>{(row.ctr * 100).toFixed(2)}%</td>
-          <td style={styles.td}>{row.position.toFixed(2)}</td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
-)}
+            <table style={styles.table}>
+              <colgroup>
+                <col style={styles.colKeyword} />
+                <col style={styles.colClicks} />
+                <col style={styles.colImpressions} />
+                <col style={styles.colCtr} />
+                <col style={styles.colPosition} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Mot-clé</th>
+                  <th style={styles.th}>Clics</th>
+                  <th style={styles.th}>Impressions</th>
+                  <th style={styles.th}>CTR</th>
+                  <th style={styles.th}>Position</th>
+                </tr>
+              </thead>
+              <tbody>
+                {seoData.map((row, i) => (
+                  <tr key={i}>
+                    <td style={styles.td}>{row.keyword}</td>
+                    <td style={styles.td}>{row.clicks}</td>
+                    <td style={styles.td}>{row.impressions}</td>
+                    <td style={styles.td}>{(row.ctr * 100).toFixed(2)}%</td>
+                    <td style={styles.td}>{row.position.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
+
+        {/* ✅ RECOMMANDATIONS SEO (AJOUTÉ) */}
+       {currentWebsiteId && (
+  <SEORecommendations 
+    websiteId={currentWebsiteId} 
+    token={token} 
+  />
+)}
       </div>
     </div>
   );
