@@ -1,8 +1,29 @@
 import { Link, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import api from "../services/api";
 
 function Navbar() {
   const navigate = useNavigate();
   const token = localStorage.getItem("access");
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  // ✅ Vérifier si l'utilisateur est super admin
+  useEffect(() => {
+    const checkAdminRole = async () => {
+      if (!token) return;
+      
+      try {
+        const res = await api.get("/auth/me/", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setIsSuperAdmin(res.data.role === "super_admin");
+      } catch (error) {
+        console.error("Erreur vérification rôle admin:", error);
+      }
+    };
+    
+    checkAdminRole();
+  }, [token]);
 
   const handleLogout = () => {
     localStorage.removeItem("access");
@@ -12,22 +33,20 @@ function Navbar() {
 
   const styles = {
     nav: {
-  width: "100%",
-  background: "#ffffff",
-  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
-  padding: "16px 32px",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  boxSizing: "border-box",
-  backdropFilter: "blur(10px)",
-
-
-  position: "fixed",   // ✅ FIXE
-  top: 0,
-  left: 0,
-  zIndex: 1000,
-},
+      width: "100%",
+      background: "#ffffff",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+      padding: "16px 32px",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      boxSizing: "border-box",
+      backdropFilter: "blur(10px)",
+      position: "fixed",
+      top: 0,
+      left: 0,
+      zIndex: 1000,
+    },
     logo: {
       fontSize: "28px",
       fontWeight: "bold",
@@ -65,6 +84,14 @@ function Navbar() {
       cursor: "pointer",
       fontWeight: "bold",
     },
+    adminLink: {
+      textDecoration: "none",
+      color: "#6366f1",
+      fontWeight: "600",
+      background: "#e0e7ff",
+      padding: "8px 14px",
+      borderRadius: "8px",
+    },
   };
 
   return (
@@ -92,6 +119,14 @@ function Navbar() {
             <Link to="/dashboard" style={styles.link}>
               Dashboard
             </Link>
+            
+            {/* ✅ Lien vers l'administration (visible uniquement pour super admin) */}
+            {isSuperAdmin && (
+              <Link to="/admin" style={styles.adminLink}>
+                👑 Admin
+              </Link>
+            )}
+            
             <button style={styles.secondaryButton} onClick={handleLogout}>
               Déconnexion
             </button>

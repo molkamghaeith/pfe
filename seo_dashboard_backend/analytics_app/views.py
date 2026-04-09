@@ -18,6 +18,7 @@ from .models import Website
 from .serializers import WebsiteSerializer
 from accounts.models import GoogleAnalyticsToken
 from urllib.parse import urlparse
+from datetime import date, timedelta  # ✅ AJOUTÉ
 
 
 oauth_states = {}
@@ -53,7 +54,7 @@ def google_analytics_login(request):
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
         "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/analytics.readonly",
+        "scope": "https://www.googleapis.com/auth/analytics.readonly https://www.googleapis.com/auth/webmasters.readonly",
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -125,7 +126,7 @@ def list_ga_properties(request):
     return JsonResponse(properties, safe=False)
 
 
-# ================= DATA =================
+# ================= DATA (MODIFIÉ AVEC PÉRIODE) =================
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -136,10 +137,23 @@ def get_ga_data(request, property_id):
 
     service = build("analyticsdata", "v1beta", credentials=credentials)
 
+    # 📅 Récupérer les dates depuis les paramètres GET
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+
+    # Si les dates ne sont pas fournies, utiliser les 30 derniers jours par défaut
+    if not start_date_str or not end_date_str:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+        start_date_str = start_date.strftime("%Y-%m-%d")
+        end_date_str = end_date.strftime("%Y-%m-%d")
+
+    print(f"📊 Période Analytics : du {start_date_str} au {end_date_str}")
+
     response = service.properties().runReport(
         property=f"properties/{property_id}",
         body={
-            "dateRanges": [{"startDate": "2026-02-28", "endDate": "2026-03-30"}],
+            "dateRanges": [{"startDate": start_date_str, "endDate": end_date_str}],
             "dimensions": [{"name": "date"}],
             "metrics": [
                 {"name": "activeUsers"},
@@ -161,6 +175,7 @@ def get_ga_data(request, property_id):
         })
 
     return Response(data)
+
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -217,3 +232,71 @@ def verify_ga_property_url(request):
         "site_url": site_url,
         "message": "Cette propriété Google Analytics ne correspond pas à l’URL saisie."
     })
+
+
+# ================= SEARCH CONSOLE (MODIFIÉ) =================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_search_console_data(request):
+    site_url = request.GET.get("site_url")
+
+    if not site_url:
+        return JsonResponse({"error": "site_url manquant"}, status=400)
+
+    # 📅 Récupérer les dates depuis les paramètres GET
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except:
+        return JsonResponse({"error": "Token Google introuvable"}, status=404)
+
+    credentials = Credentials(
+        token=token_obj.access_token,
+        refresh_token=token_obj.refresh_token,
+        token_uri=token_obj.token_uri,
+        client_id=token_obj.client_id,
+        client_secret=token_obj.client_secret,
+        scopes=[
+            "https://www.googleapis.com/auth/webmasters.readonly"
+        ],
+    )
+
+    service = build("searchconsole", "v1", credentials=credentials)
+
+    # Utiliser les dates fournies ou 90 jours par défaut
+    if start_date_str and end_date_str:
+        start_date = start_date_str
+        end_date = end_date_str
+    else:
+        end_date_obj = date.today()
+        start_date_obj = end_date_obj - timedelta(days=90)
+        start_date = str(start_date_obj)
+        end_date = str(end_date_obj)
+
+    request_body = {
+        "startDate": start_date,
+        "endDate": end_date,
+        "dimensions": ["query"],
+        "rowLimit": 10
+    }
+
+    response = service.searchanalytics().query(
+        siteUrl=site_url,
+        body=request_body
+    ).execute()
+
+    results = []
+
+    for row in response.get("rows", []):
+        results.append({
+            "keyword": row["keys"][0],
+            "clicks": row["clicks"],
+            "impressions": row["impressions"],
+            "ctr": row["ctr"],
+            "position": row["position"],
+        })
+
+    return JsonResponse(results, safe=False)

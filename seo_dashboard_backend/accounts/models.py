@@ -13,3 +13,10 @@ class GoogleAnalyticsToken(models.Model):
 
     def __str__(self):
         return f"Google token - {self.user.username}"
+class Site(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    url = models.URLField()
+    nom_site = models.CharField(max_length=255)
+
+    class Meta:
+        unique_together = ('user', 'url')

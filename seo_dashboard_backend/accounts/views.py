@@ -7,19 +7,66 @@ from django.core.mail import send_mail
 
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated  # ✅ Fusionné en une seule ligne
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.exceptions import InvalidToken
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
 from .serializers import RegisterSerializer
+from analytics_app.models import Website
 
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # ✅ Créer l'utilisateur mais désactivé par défaut
+        user = User.objects.create_user(
+            username=serializer.validated_data['username'],
+            email=serializer.validated_data['email'],
+            password=serializer.validated_data['password'],
+            is_active=False  # 🔥 Compte désactivé par défaut
+        )
+        
+        return Response(
+            {"message": "Compte créé. En attente d'activation par l'administrateur."},
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ✅ Vue de connexion personnalisée pour vérifier l'activation du compte
+class CustomTokenObtainPairView(TokenObtainPairView):
+    def post(self, request, *args, **kwargs):
+        username = request.data.get('username')
+        
+        # Vérifier si l'utilisateur existe mais est inactif
+        try:
+            user = User.objects.get(username=username)
+            if not user.is_active:
+                return Response(
+                    {"error": "Votre compte est en attente d'activation par l'administrateur."},
+                    status=401
+                )
+        except User.DoesNotExist:
+            pass
+        
+        # Continuer avec la connexion normale
+        serializer = self.get_serializer(data=request.data)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception as e:
+            raise e
+        
+        return Response(serializer.validated_data, status=200)
 
 
 @api_view(["POST"])
@@ -70,9 +117,17 @@ def google_auth(request):
             email=email,
             first_name=given_name,
             password=None,
+            is_active=False  # 🔥 Compte Google désactivé par défaut
         )
         user.set_unusable_password()
         user.save()
+
+    # ✅ Vérifier si le compte est actif avant de connecter
+    if not user.is_active:
+        return Response(
+            {"error": "Votre compte est en attente d'activation par l'administrateur."},
+            status=401
+        )
 
     refresh = RefreshToken.for_user(user)
 
@@ -88,6 +143,7 @@ def google_auth(request):
         status=200,
     )
 
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def forgot_password(request):
@@ -102,6 +158,13 @@ def forgot_password(request):
         return Response(
             {"message": "Si cet email existe, un lien a été généré."},
             status=200,
+        )
+
+    # ✅ Vérifier si le compte est actif
+    if not user.is_active:
+        return Response(
+            {"error": "Ce compte est en attente d'activation. Veuillez contacter l'administrateur."},
+            status=400,
         )
 
     if not user.has_usable_password():
@@ -152,3 +215,133 @@ def reset_password_confirm(request):
     user.save()
 
     return Response({"message": "Mot de passe réinitialisé avec succès"}, status=200)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_role(request):
+    """Retourne le rôle de l'utilisateur connecté"""
+    user = request.user
+    role = "user"
+    
+    if user.is_superuser:
+        role = "super_admin"
+    elif user.is_staff:
+        role = "admin"
+    
+    return Response({
+        "username": user.username,
+        "email": user.email,
+        "role": role,
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+        "is_staff": user.is_staff,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_get_users(request):
+    """Récupérer tous les utilisateurs (admin uniquement)"""
+    if not request.user.is_superuser:
+        return Response({"error": "Non autorisé"}, status=403)
+    
+    users = User.objects.all().order_by('-date_joined')
+    data = []
+    for user in users:
+        data.append({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_active": user.is_active,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+            "date_joined": user.date_joined,
+        })
+    return Response(data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_toggle_user_status(request, user_id):
+    """Activer/désactiver un utilisateur"""
+    if not request.user.is_superuser:
+        return Response({"error": "Non autorisé"}, status=403)
+    
+    try:
+        user = User.objects.get(id=user_id)
+        user.is_active = not user.is_active
+        user.save()
+        return Response({"message": "Statut modifié", "is_active": user.is_active})
+    except User.DoesNotExist:
+        return Response({"error": "Utilisateur non trouvé"}, status=404)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def admin_delete_user(request, user_id):
+    """Supprimer un utilisateur"""
+    if not request.user.is_superuser:
+        return Response({"error": "Non autorisé"}, status=403)
+    
+    if request.user.id == user_id:
+        return Response({"error": "Vous ne pouvez pas vous supprimer vous-même"}, status=400)
+    
+    try:
+        user = User.objects.get(id=user_id)
+        user.delete()
+        return Response({"message": "Utilisateur supprimé"})
+    except User.DoesNotExist:
+        return Response({"error": "Utilisateur non trouvé"}, status=404)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def admin_get_stats(request):
+    """Statistiques globales pour l'admin"""
+    if not request.user.is_superuser:
+        return Response({"error": "Non autorisé"}, status=403)
+    
+    return Response({
+        "total_users": User.objects.count(),
+        "active_users": User.objects.filter(is_active=True).count(),
+        "pending_users": User.objects.filter(is_active=False).count(),
+        "total_sites": Website.objects.count(),
+    })
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def admin_create_user(request):
+    """Créer un nouvel utilisateur (admin uniquement)"""
+    if not request.user.is_superuser:
+        return Response({"error": "Non autorisé"}, status=403)
+    
+    username = request.data.get("username")
+    email = request.data.get("email")
+    password = request.data.get("password")
+    is_active = request.data.get("is_active", True)
+    
+    if not username or not email or not password:
+        return Response({"error": "Username, email et mot de passe requis"}, status=400)
+    
+    # Vérifier si l'utilisateur existe déjà
+    if User.objects.filter(username=username).exists():
+        return Response({"error": "Ce nom d'utilisateur existe déjà"}, status=400)
+    
+    if User.objects.filter(email=email).exists():
+        return Response({"error": "Cet email existe déjà"}, status=400)
+    
+    user = User.objects.create_user(
+        username=username,
+        email=email,
+        password=password,
+        is_active=is_active
+    )
+    
+    return Response({
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "is_active": user.is_active,
+        "date_joined": user.date_joined,
+    }, status=status.HTTP_201_CREATED)

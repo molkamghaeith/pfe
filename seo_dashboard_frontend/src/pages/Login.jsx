@@ -8,6 +8,9 @@ function Login() {
     username: "",
     password: "",
   });
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [showActivationInfo, setShowActivationInfo] = useState(false); // ✅ AJOUTÉ
 
   const googleBtnRef = useRef(null);
   const navigate = useNavigate();
@@ -30,6 +33,7 @@ function Login() {
   }, []);
 
   const handleGoogleResponse = async (response) => {
+    setIsLoading(true);
     try {
       const res = await api.post("/auth/google/", {
         credential: response.credential,
@@ -38,24 +42,36 @@ function Login() {
       localStorage.setItem("access", res.data.access);
       localStorage.setItem("refresh", res.data.refresh);
 
-      alert("Connexion Google réussie");
       navigate("/dashboard");
     } catch (error) {
       console.error(error);
-      alert(
-        error.response?.data?.error ||
-          error.response?.data?.detail ||
-          "Erreur Google login"
-      );
+      
+      const errorMsg = error.response?.data?.error || 
+                       error.response?.data?.detail ||
+                       "Erreur Google login";
+      
+      if (errorMsg.includes("attente d'activation")) {
+        setErrorMessage("⏳ Votre compte Google est en attente d'activation par l'administrateur.");
+        setShowActivationInfo(true);
+      } else {
+        setErrorMessage(errorMsg);
+        setShowActivationInfo(false);
+      }
     }
+    setIsLoading(false);
   };
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
+    setErrorMessage("");
+    setShowActivationInfo(false);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
+    setErrorMessage("");
+    setShowActivationInfo(false);
 
     try {
       const response = await api.post("/auth/login/", form);
@@ -66,24 +82,67 @@ function Login() {
       navigate("/dashboard");
     } catch (error) {
       console.error(error);
-      alert(
-        error.response?.data?.detail ||
-          error.response?.data?.error ||
-          "Erreur de connexion"
-      );
+      
+      const errorMsg = error.response?.data?.detail ||
+                       error.response?.data?.error ||
+                       "Erreur de connexion";
+      
+      if (errorMsg.includes("attente d'activation")) {
+        setErrorMessage("⏳ Votre compte est en attente d'activation par l'administrateur.");
+        setShowActivationInfo(true);
+      } else if (errorMsg.includes("No active account") || errorMsg.includes("identifiants")) {
+        setErrorMessage("❌ Nom d'utilisateur ou mot de passe incorrect.");
+        setShowActivationInfo(false);
+      } else {
+        setErrorMessage(errorMsg);
+        setShowActivationInfo(false);
+      }
     }
+    setIsLoading(false);
   };
 
   return (
     <div style={styles.page}>
       <div style={styles.wrapper}>
-         <div style={styles.right}>
+        <div style={styles.right}>
           <img src={loginImg} alt="SEOmind login visual" style={styles.image} />
         </div>
         <div style={styles.left}>
           <div style={styles.formBox}>
             <h2 style={styles.title}>Connexion</h2>
             <p style={styles.subtitle}>Accède à ton dashboard SEOmind.</p>
+
+            {/* ✅ Message d'information pour compte en attente d'activation */}
+            {showActivationInfo && (
+              <div style={{
+                background: "#f3f4f6",
+                color: "#374151",
+                padding: "12px",
+                borderRadius: "8px",
+                marginBottom: "20px",
+                fontSize: "13px",
+                textAlign: "center",
+                border: "1px solid #e5e7eb"
+              }}>
+                📧 <strong>Compte en attente d'activation</strong><br />
+                Vous recevrez un email dès que l'administrateur aura activé votre compte.
+              </div>
+            )}
+
+            {/* ✅ Affichage des erreurs */}
+            {errorMessage && !showActivationInfo && (
+              <div style={{
+                background: errorMessage.includes("attente d'activation") ? "#fef3c7" : "#fee2e2",
+                color: errorMessage.includes("attente d'activation") ? "#92400e" : "#dc2626",
+                padding: "12px",
+                borderRadius: "8px",
+                marginBottom: "20px",
+                fontSize: "14px",
+                textAlign: "center"
+              }}>
+                {errorMessage}
+              </div>
+            )}
 
             <form onSubmit={handleSubmit}>
               <input
@@ -93,6 +152,8 @@ function Login() {
                 placeholder="Nom d'utilisateur"
                 value={form.username}
                 onChange={handleChange}
+                disabled={isLoading}
+                required
               />
 
               <input
@@ -102,10 +163,12 @@ function Login() {
                 placeholder="Mot de passe"
                 value={form.password}
                 onChange={handleChange}
+                disabled={isLoading}
+                required
               />
 
-              <button style={styles.button} type="submit">
-                Se connecter
+              <button style={styles.button} type="submit" disabled={isLoading}>
+                {isLoading ? "Connexion en cours..." : "Se connecter"}
               </button>
             </form>
 
@@ -125,8 +188,6 @@ function Login() {
             </p>
           </div>
         </div>
-
-       
       </div>
     </div>
   );
@@ -166,7 +227,7 @@ const styles = {
     maxWidth: "380px",
   },
   right: {
-    background: "linear-gradient( #ffffff)",
+    background: "#ffffff",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
