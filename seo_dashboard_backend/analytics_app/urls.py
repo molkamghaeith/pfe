@@ -8,7 +8,10 @@ from .views import (
     get_ga_data,
     verify_ga_property_url,
     get_search_console_data,
-    get_seo_recommendations_api
+    get_seo_recommendations_api,
+    export_seo_csv,
+    export_analytics_csv,
+    export_full_pdf,
 )
 
 urlpatterns = [
@@ -21,4 +24,7 @@ urlpatterns = [
     path("google-analytics/verify-url/", verify_ga_property_url),
     path("search-console/data/", get_search_console_data),
     path("recommendations/<int:website_id>/", get_seo_recommendations_api),
+    path("export/seo-csv/<int:website_id>/", export_seo_csv),
+    path("export/analytics-csv/<int:website_id>/", export_analytics_csv),
+    path("export/full-pdf/<int:website_id>/", export_full_pdf),
 ]

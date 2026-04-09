@@ -18,9 +18,9 @@ from .models import Website
 from .serializers import WebsiteSerializer
 from accounts.models import GoogleAnalyticsToken
 from urllib.parse import urlparse
-from datetime import date, timedelta  # ✅ AJOUTÉ
+from datetime import date, timedelta
 from .seo_agent import get_seo_recommendations
-from .models import Website, Analysis 
+from .models import Website, Analysis
 
 
 oauth_states = {}
@@ -128,7 +128,7 @@ def list_ga_properties(request):
     return JsonResponse(properties, safe=False)
 
 
-# ================= DATA (MODIFIÉ AVEC PÉRIODE) =================
+# ================= DATA =================
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -139,11 +139,9 @@ def get_ga_data(request, property_id):
 
     service = build("analyticsdata", "v1beta", credentials=credentials)
 
-    # 📅 Récupérer les dates depuis les paramètres GET
     start_date_str = request.GET.get("start_date")
     end_date_str = request.GET.get("end_date")
 
-    # Si les dates ne sont pas fournies, utiliser les 30 derniers jours par défaut
     if not start_date_str or not end_date_str:
         end_date = date.today()
         start_date = end_date - timedelta(days=30)
@@ -236,7 +234,7 @@ def verify_ga_property_url(request):
     })
 
 
-# ================= SEARCH CONSOLE (MODIFIÉ) =================
+# ================= SEARCH CONSOLE =================
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -246,7 +244,6 @@ def get_search_console_data(request):
     if not site_url:
         return JsonResponse({"error": "site_url manquant"}, status=400)
 
-    # 📅 Récupérer les dates depuis les paramètres GET
     start_date_str = request.GET.get("start_date")
     end_date_str = request.GET.get("end_date")
 
@@ -268,7 +265,6 @@ def get_search_console_data(request):
 
     service = build("searchconsole", "v1", credentials=credentials)
 
-    # Utiliser les dates fournies ou 90 jours par défaut
     if start_date_str and end_date_str:
         start_date = start_date_str
         end_date = end_date_str
@@ -304,29 +300,217 @@ def get_search_console_data(request):
     return JsonResponse(results, safe=False)
 
 
+# ================= RECOMMANDATIONS SEO =================
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_seo_recommendations_api(request, website_id):
-    """API pour obtenir les recommandations SEO pour un site"""
     try:
         website = Website.objects.get(id=website_id, user=request.user)
     except Website.DoesNotExist:
         return Response({"error": "Site non trouvé"}, status=404)
     
-    # Récupérer les données GA et GSC
     ga_data = []
     gsc_data = []
     
-    # Récupérer les dernières analyses GA - CORRECTION DES CHAMPS
     analyses = Analysis.objects.filter(website=website).order_by('-date_analyse')[:30]
     for analysis in analyses:
         ga_data.append({
-            'users': analysis.trafic,  # ✅ CORRIGÉ: 'trafic' au lieu de 'trafic_organique'
-            'sessions': analysis.clics,  # ✅ CORRIGÉ
-            'bounceRate': 0  # Valeur par défaut
+            'users': analysis.trafic,
+            'sessions': analysis.clics,
+            'bounceRate': 0
         })
     
-    # Exécuter l'agent SEO
     recommendations = get_seo_recommendations(website.url, ga_data, gsc_data)
     
     return Response(recommendations)
+
+
+# ================= EXPORT FONCTIONS (VRAIES DONNÉES) =================
+
+from .export_utils import export_seo_to_csv, export_analytics_to_csv, export_full_report_pdf
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_seo_csv(request, website_id):
+    """Exporte les données Search Console en CSV - VRAIES DONNÉES"""
+    try:
+        website = Website.objects.get(id=website_id, user=request.user)
+    except Website.DoesNotExist:
+        return Response({"error": "Site non trouvé"}, status=404)
+    
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return Response({"error": "Token Google non trouvé"}, status=404)
+    
+    # Récupérer les données SEO réelles
+    end_date = date.today()
+    start_date = end_date - timedelta(days=90)
+    
+    credentials = Credentials(
+        token=token_obj.access_token,
+        refresh_token=token_obj.refresh_token,
+        token_uri=token_obj.token_uri,
+        client_id=token_obj.client_id,
+        client_secret=token_obj.client_secret,
+        scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
+    )
+    
+    service = build("searchconsole", "v1", credentials=credentials)
+    
+    request_body = {
+        "startDate": str(start_date),
+        "endDate": str(end_date),
+        "dimensions": ["query"],
+        "rowLimit": 100
+    }
+    
+    response = service.searchanalytics().query(
+        siteUrl=website.url,
+        body=request_body
+    ).execute()
+    
+    gsc_data = []
+    for row in response.get("rows", []):
+        gsc_data.append({
+            "keyword": row["keys"][0],
+            "clicks": row["clicks"],
+            "impressions": row["impressions"],
+            "ctr": row["ctr"],
+            "position": row["position"],
+        })
+    
+    return export_seo_to_csv(gsc_data, website.nom_site)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_analytics_csv(request, website_id):
+    """Exporte les données Google Analytics en CSV - VRAIES DONNÉES"""
+    try:
+        website = Website.objects.get(id=website_id, user=request.user)
+    except Website.DoesNotExist:
+        return Response({"error": "Site non trouvé"}, status=404)
+    
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return Response({"error": "Token Google non trouvé"}, status=404)
+    
+    # Récupérer les données GA réelles
+    end_date = date.today()
+    start_date = end_date - timedelta(days=30)
+    start_date_str = start_date.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-%m-%d")
+    
+    credentials = Credentials(token=token_obj.access_token)
+    service = build("analyticsdata", "v1beta", credentials=credentials)
+    
+    response = service.properties().runReport(
+        property=f"properties/{website.property_id}",
+        body={
+            "dateRanges": [{"startDate": start_date_str, "endDate": end_date_str}],
+            "dimensions": [{"name": "date"}],
+            "metrics": [
+                {"name": "activeUsers"},
+                {"name": "sessions"},
+                {"name": "screenPageViews"},
+            ],
+        },
+    ).execute()
+    
+    ga_data = []
+    for row in response.get("rows", []):
+        ga_data.append({
+            "date": row["dimensionValues"][0]["value"],
+            "users": row["metricValues"][0]["value"],
+            "sessions": row["metricValues"][1]["value"],
+            "views": row["metricValues"][2]["value"],
+        })
+    
+    return export_analytics_to_csv(ga_data, website.nom_site)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def export_full_pdf(request, website_id):
+    """Exporte un rapport complet en PDF - VRAIES DONNÉES"""
+    try:
+        website = Website.objects.get(id=website_id, user=request.user)
+    except Website.DoesNotExist:
+        return Response({"error": "Site non trouvé"}, status=404)
+    
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return Response({"error": "Token Google non trouvé"}, status=404)
+    
+    # 1. Récupérer les données GA réelles
+    end_date = date.today()
+    start_date_ga = end_date - timedelta(days=30)
+    start_date_ga_str = start_date_ga.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-%m-%d")
+    
+    credentials = Credentials(token=token_obj.access_token)
+    service_ga = build("analyticsdata", "v1beta", credentials=credentials)
+    
+    ga_response = service_ga.properties().runReport(
+        property=f"properties/{website.property_id}",
+        body={
+            "dateRanges": [{"startDate": start_date_ga_str, "endDate": end_date_str}],
+            "dimensions": [{"name": "date"}],
+            "metrics": [
+                {"name": "activeUsers"},
+                {"name": "sessions"},
+                {"name": "screenPageViews"},
+            ],
+        },
+    ).execute()
+    
+    ga_data = []
+    for row in ga_response.get("rows", []):
+        ga_data.append({
+            "date": row["dimensionValues"][0]["value"],
+            "users": row["metricValues"][0]["value"],
+            "sessions": row["metricValues"][1]["value"],
+            "views": row["metricValues"][2]["value"],
+        })
+    
+    # 2. Récupérer les données GSC réelles
+    start_date_gsc = end_date - timedelta(days=90)
+    start_date_gsc_str = str(start_date_gsc)
+    
+    credentials_gsc = Credentials(
+        token=token_obj.access_token,
+        refresh_token=token_obj.refresh_token,
+        token_uri=token_obj.token_uri,
+        client_id=token_obj.client_id,
+        client_secret=token_obj.client_secret,
+        scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
+    )
+    service_gsc = build("searchconsole", "v1", credentials=credentials_gsc)
+    
+    request_body = {
+        "startDate": start_date_gsc_str,
+        "endDate": end_date_str,
+        "dimensions": ["query"],
+        "rowLimit": 50
+    }
+    
+    gsc_response = service_gsc.searchanalytics().query(
+        siteUrl=website.url,
+        body=request_body
+    ).execute()
+    
+    gsc_data = []
+    for row in gsc_response.get("rows", []):
+        gsc_data.append({
+            "keyword": row["keys"][0],
+            "clicks": row["clicks"],
+            "impressions": row["impressions"],
+            "ctr": row["ctr"],
+            "position": row["position"],
+        })
+    
+    return export_full_report_pdf(gsc_data, ga_data, website.nom_site, website.url)

@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { theme } from "../styles/theme";
 import PeriodSelector from "../components/PeriodSelector";
-import SEORecommendations from "../components/SEORecommendations"; // ✅ AJOUT
+import SEORecommendations from "../components/SEORecommendations";
 
 function Dashboard() {
   const [url, setUrl] = useState("");
@@ -174,13 +174,93 @@ function Dashboard() {
   };
 
   const handleSiteSelect = (site) => {
-  setSelectedPropertyId(site.property_id);
-  setSelectedPropertyName(site.property_name);
-  setCurrentSiteUrl(site.url);
-  setCurrentWebsiteId(site.id);  // ✅ AJOUTER : stocke l'ID du site pour l'agent SEO
-  fetchGAData(site.property_id);
-  fetchSearchConsole(site.url);
-};
+    setSelectedPropertyId(site.property_id);
+    setSelectedPropertyName(site.property_name);
+    setCurrentSiteUrl(site.url);
+    setCurrentWebsiteId(site.id);
+    fetchGAData(site.property_id);
+    fetchSearchConsole(site.url);
+  };
+
+  // ================= EXPORT FUNCTIONS (MODIFIÉES) =================
+  const exportSEOCSV = async () => {
+    if (!currentWebsiteId) {
+      alert("Sélectionnez d'abord un site");
+      return;
+    }
+    
+    try {
+      const response = await api.get(`/export/seo-csv/${currentWebsiteId}/`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `seo_report_${currentWebsiteId}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert("Erreur lors de l'export CSV");
+    }
+  };
+
+  const exportAnalyticsCSV = async () => {
+    if (!currentWebsiteId) {
+      alert("Sélectionnez d'abord un site");
+      return;
+    }
+    
+    try {
+      const response = await api.get(`/export/analytics-csv/${currentWebsiteId}/`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `analytics_report_${currentWebsiteId}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert("Erreur lors de l'export CSV");
+    }
+  };
+
+  const exportFullPDF = async () => {
+    if (!currentWebsiteId) {
+      alert("Sélectionnez d'abord un site");
+      return;
+    }
+    
+    try {
+      const response = await api.get(`/export/full-pdf/${currentWebsiteId}/`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `seo_full_report_${currentWebsiteId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      alert("Erreur lors de l'export PDF: " + (error.response?.data?.error || error.message));
+    }
+  };
+
   // ================= STYLES =================
   const styles = {
     searchContainer: {
@@ -220,6 +300,40 @@ function Dashboard() {
       border: "none",
       borderRadius: "6px",
       cursor: "pointer",
+    },
+    exportButtons: {
+      display: "flex",
+      gap: "10px",
+      marginBottom: "20px",
+      flexWrap: "wrap",
+      justifyContent: "center",
+    },
+    exportBtnSEO: {
+      background: "#10b981",
+      color: "#fff",
+      border: "none",
+      padding: "10px 16px",
+      borderRadius: "8px",
+      cursor: "pointer",
+      fontWeight: "bold",
+    },
+    exportBtnAnalytics: {
+      background: "#3b82f6",
+      color: "#fff",
+      border: "none",
+      padding: "10px 16px",
+      borderRadius: "8px",
+      cursor: "pointer",
+      fontWeight: "bold",
+    },
+    exportBtnPDF: {
+      background: "#ef4444",
+      color: "#fff",
+      border: "none",
+      padding: "10px 16px",
+      borderRadius: "8px",
+      cursor: "pointer",
+      fontWeight: "bold",
     },
   };
 
@@ -290,6 +404,19 @@ function Dashboard() {
           ))}
         </div>
 
+        {/* BOUTONS D'EXPORT */}
+        <div style={styles.exportButtons}>
+          <button style={styles.exportBtnSEO} onClick={exportSEOCSV}>
+            📊 Exporter SEO (CSV)
+          </button>
+          <button style={styles.exportBtnAnalytics} onClick={exportAnalyticsCSV}>
+            📈 Exporter Analytics (CSV)
+          </button>
+          <button style={styles.exportBtnPDF} onClick={exportFullPDF}>
+            📄 Exporter Rapport complet (PDF)
+          </button>
+        </div>
+
         {/* SÉLECTEUR DE PÉRIODE */}
         <PeriodSelector onPeriodChange={handlePeriodChange} currentPeriod={currentPeriod} />
 
@@ -356,13 +483,13 @@ function Dashboard() {
           )}
         </div>
 
-        {/* ✅ RECOMMANDATIONS SEO (AJOUTÉ) */}
-       {currentWebsiteId && (
-  <SEORecommendations 
-    websiteId={currentWebsiteId} 
-    token={token} 
-  />
-)}
+        {/* RECOMMANDATIONS SEO */}
+        {currentWebsiteId && (
+          <SEORecommendations 
+            websiteId={currentWebsiteId} 
+            token={token} 
+          />
+        )}
       </div>
     </div>
   );
