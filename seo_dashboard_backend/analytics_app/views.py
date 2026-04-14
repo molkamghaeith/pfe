@@ -18,8 +18,8 @@ from .models import Website
 from .serializers import WebsiteSerializer
 from accounts.models import GoogleAnalyticsToken
 from urllib.parse import urlparse
-from datetime import date, timedelta
-from .smart_seo_agent import get_smart_seo_recommendations  # ✅ NOUVEL AGENT INTELLIGENT
+from datetime import date, timedelta, datetime
+from .smart_seo_agent import get_smart_seo_recommendations
 from .models import Website, Analysis
 
 
@@ -300,12 +300,46 @@ def get_search_console_data(request):
     return JsonResponse(results, safe=False)
 
 
-# ================= RECOMMANDATIONS SEO (NOUVEL AGENT INTELLIGENT) =================
+# ================= RECOMMANDATIONS SEO (MODIFIÉ POUR INCLURE TOP PAGES) =================
+
+def fetch_top_pages_for_agent(property_id, user):
+    """Récupère les top pages (chemins + vues) pour les 30 derniers jours."""
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return []
+    credentials = Credentials(token=token_obj.access_token)
+    service = build("analyticsdata", "v1beta", credentials=credentials)
+    end_date = date.today()
+    start_date = end_date - timedelta(days=30)
+    start = start_date.strftime("%Y-%m-%d")
+    end = end_date.strftime("%Y-%m-%d")
+    try:
+        response = service.properties().runReport(
+            property=f"properties/{property_id}",
+            body={
+                "dateRanges": [{"startDate": start, "endDate": end}],
+                "dimensions": [{"name": "pagePath"}],
+                "metrics": [{"name": "screenPageViews"}],
+                "orderBys": [{"metric": {"metricName": "screenPageViews"}, "desc": True}],
+                "limit": 10
+            }
+        ).execute()
+        pages = []
+        for row in response.get("rows", []):
+            path = row["dimensionValues"][0]["value"]
+            views = int(row["metricValues"][0]["value"])
+            pages.append({"path": path, "views": views})
+        return pages
+    except Exception as e:
+        print(f"Erreur fetch top pages pour agent: {e}")
+        return []
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_seo_recommendations_api(request, website_id):
-    """API pour obtenir les recommandations SEO avec l'agent intelligent"""
+    """API pour obtenir les recommandations SEO avec l'agent intelligent et les top pages"""
     try:
         website = Website.objects.get(id=website_id, user=request.user)
     except Website.DoesNotExist:
@@ -323,13 +357,122 @@ def get_seo_recommendations_api(request, website_id):
             'views': analysis.impressions,
         })
     
-    # Utiliser le nouvel agent intelligent (sans if/else)
-    recommendations = get_smart_seo_recommendations(website.url, ga_data, gsc_data)
+    # Récupérer les top pages (pour conseils par page)
+    top_pages_data = fetch_top_pages_for_agent(website.property_id, request.user)
+    
+    # Utiliser le nouvel agent intelligent avec les top pages
+    recommendations = get_smart_seo_recommendations(website.url, ga_data, gsc_data, top_pages_data)
     
     return Response(recommendations)
 
 
-# ================= EXPORT FONCTIONS (VRAIES DONNÉES) =================
+# ================= TOP PAGES (AVEC PARAMÈTRES DE DATE) =================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_top_pages(request, property_id):
+    """Récupère les pages les plus vues (chemins) depuis Google Analytics"""
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return Response({"error": "Token Google non trouvé"}, status=404)
+
+    credentials = Credentials(token=token_obj.access_token)
+    service = build("analyticsdata", "v1beta", credentials=credentials)
+
+    # Période
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+    if not start_date_str or not end_date_str:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+    else:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+
+    start = start_date.strftime("%Y-%m-%d")
+    end = end_date.strftime("%Y-%m-%d")
+    print(f"🔍 Top pages - période : {start} → {end}")
+
+    try:
+        response = service.properties().runReport(
+            property=f"properties/{property_id}",
+            body={
+                "dateRanges": [{"startDate": start, "endDate": end}],
+                "dimensions": [{"name": "pagePath"}],
+                "metrics": [{"name": "screenPageViews"}],
+                "orderBys": [{"metric": {"metricName": "screenPageViews"}, "desc": True}],
+                "limit": 10
+            }
+        ).execute()
+    except Exception as e:
+        print(f"❌ Erreur API Google : {e}")
+        return Response({"error": str(e)}, status=500)
+
+    pages = []
+    for row in response.get("rows", []):
+        path = row["dimensionValues"][0]["value"]
+        views = int(row["metricValues"][0]["value"])
+        pages.append({
+            "title": path,
+            "path": path,
+            "views": views
+        })
+
+    print(f"📄 {len(pages)} pages trouvées")
+    return Response(pages)
+
+
+# ================= TRAFIC ORGANIQUE =================
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_organic_traffic(request, property_id):
+    """Récupère le nombre d'utilisateurs organiques (moteurs de recherche)"""
+    try:
+        token_obj = GoogleAnalyticsToken.objects.get(user=request.user)
+    except GoogleAnalyticsToken.DoesNotExist:
+        return Response({"error": "Token Google non trouvé"}, status=404)
+
+    credentials = Credentials(token=token_obj.access_token)
+    service = build("analyticsdata", "v1beta", credentials=credentials)
+
+    start_date_str = request.GET.get("start_date")
+    end_date_str = request.GET.get("end_date")
+    if not start_date_str or not end_date_str:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+    else:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+
+    start = start_date.strftime("%Y-%m-%d")
+    end = end_date.strftime("%Y-%m-%d")
+
+    # Filtre sur le canal "Organic Search"
+    dimension_filter = {
+        "fieldName": "sessionDefaultChannelGrouping",
+        "stringFilter": {"matchType": "EXACT", "value": "Organic Search"}
+    }
+
+    response = service.properties().runReport(
+        property=f"properties/{property_id}",
+        body={
+            "dateRanges": [{"startDate": start, "endDate": end}],
+            "metrics": [{"name": "activeUsers"}],
+            "dimensionFilter": dimension_filter
+        }
+    ).execute()
+
+    users = 0
+    for row in response.get("rows", []):
+        users = int(row["metricValues"][0]["value"])
+        break
+
+    return Response({"organic_users": users})
+
+
+# ================= EXPORT FONCTIONS =================
 
 from .export_utils import export_seo_to_csv, export_analytics_to_csv, export_full_report_pdf
 

@@ -12,6 +12,8 @@ from .views import (
     export_seo_csv,
     export_analytics_csv,
     export_full_pdf,
+    get_top_pages,
+    get_organic_traffic,
 )
 
 urlpatterns = [
@@ -27,4 +29,6 @@ urlpatterns = [
     path("export/seo-csv/<int:website_id>/", export_seo_csv),
     path("export/analytics-csv/<int:website_id>/", export_analytics_csv),
     path("export/full-pdf/<int:website_id>/", export_full_pdf),
+    path("top-pages/<str:property_id>/", get_top_pages),
+    path("organic-traffic/<str:property_id>/", get_organic_traffic),
 ]

@@ -7,6 +7,17 @@ import re
 import aiohttp
 import asyncio
 
+# ================= NLP =================
+try:
+    import spacy
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    NLP_AVAILABLE = True
+except ImportError:
+    NLP_AVAILABLE = False
+    print("⚠️ NLP non disponible. Installez spacy et scikit-learn : pip install spacy scikit-learn")
+    print("   Puis : python -m spacy download fr_core_news_sm")
+
 # ================= BENCHMARKS PAR SECTEUR =================
 INDUSTRY_BENCHMARKS = {
     'default': {
@@ -83,14 +94,14 @@ CATEGORY_WEIGHTS = {
 
 class SmartSEOAgent:
     """
-    Agent SEO intelligent sans conditions if/else
-    Utilise des calculs mathématiques et statistiques
+    Agent SEO intelligent avec analyse sémantique (NLP) et analyse de contenu des top pages
     """
     
-    def __init__(self, site_url, ga_data=None, gsc_data=None):
+    def __init__(self, site_url, ga_data=None, gsc_data=None, top_pages_data=None):
         self.site_url = site_url
         self.ga_data = ga_data if ga_data else []
         self.gsc_data = gsc_data if gsc_data else []
+        self.top_pages_data = top_pages_data if top_pages_data else []
         self.scores = {}
         self.recommendations = []
         self.benchmark = None
@@ -109,6 +120,14 @@ class SmartSEOAgent:
         self.images_without_alt = 0
         self.text_length = 0
         self.internal_links = 0
+        # NLP
+        self.nlp = None
+        if NLP_AVAILABLE:
+            try:
+                self.nlp = spacy.load("fr_core_news_sm")
+            except OSError:
+                print("⚠️ Modèle français non trouvé. Exécutez : python -m spacy download fr_core_news_sm")
+                self.nlp = None
         
     def detect_industry(self, soup, text):
         """Détecte automatiquement le secteur d'activité"""
@@ -206,18 +225,145 @@ class SmartSEOAgent:
         
         return issues
     
+    def analyze_single_page(self, page_url, page_path):
+        """Analyse le contenu d'une page individuelle (NLP) et retourne une recommandation si nécessaire."""
+        if not self.nlp:
+            return None
+        
+        try:
+            # Récupérer le contenu de la page
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(page_url, timeout=10, headers=headers)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Supprimer les balises script/style
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text()
+            
+            # Nettoyer le texte
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            # Ignorer les pages avec très peu de contenu
+            if not clean_text or len(clean_text) < 200:
+                return None
+            
+            # Analyse NLP
+            doc = self.nlp(clean_text[:500000])  # Limite de caractères
+            tokens = [token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct and token.is_alpha]
+            unique_lemmas = set(tokens)
+            lexical_richness = len(unique_lemmas) / len(tokens) if tokens else 0
+            
+            # Construction des mots-clés de référence
+            main_keywords = []
+            
+            # 1. Essayer d'abord avec les mots-clés GSC
+            if self.gsc_data:
+                main_keywords = [kw['keyword'] for kw in self.gsc_data[:3] if kw.get('keyword')]
+            
+            # 2. Fallback : utiliser le titre de la page s'il existe
+            if not main_keywords:
+                title_tag = soup.find('title')
+                if title_tag and title_tag.string:
+                    title = title_tag.string.strip()
+                    if title:
+                        main_keywords = [title]
+            
+            # 3. Dernier fallback : utiliser le chemin (segment final)
+            if not main_keywords:
+                if page_path == '/' or page_path == '':
+                    main_keywords = ["accueil"]
+                else:
+                    segment = page_path.rstrip('/').split('/')[-1].replace('-', ' ')
+                    if segment:
+                        main_keywords = [segment]
+                    else:
+                        main_keywords = ["page"]
+            
+            # Vectorisation et similarité
+            vectorizer = TfidfVectorizer()
+            page_vector = vectorizer.fit_transform([clean_text])
+            best_similarity = 0
+            best_kw = ""
+            
+            for kw in main_keywords:
+                kw_clean = ' '.join([token.lemma_.lower() for token in self.nlp(kw) if not token.is_stop])
+                if kw_clean:
+                    kw_vector = vectorizer.transform([kw_clean])
+                    similarity = cosine_similarity(page_vector, kw_vector)[0][0]
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+                        best_kw = kw
+            
+            # Si aucun mot-clé valide n'a été trouvé, on ne génère pas de recommandation
+            if not best_kw:
+                return None
+            
+            # Construire le message de recommandation
+            issues = []
+            if lexical_richness < 0.3:
+                issues.append("vocabulaire limité, utilisez des synonymes")
+            if best_similarity < 0.1:
+                issues.append(f"très faible similarité avec le mot-clé '{best_kw}'")
+            elif best_similarity < 0.3:
+                issues.append(f"similarité moyenne avec '{best_kw}', ajoutez des termes connexes")
+            
+            if not issues:
+                return None
+            
+            message = f"📄 Page {page_path} : " + ", ".join(issues)
+            priority = 'high' if best_similarity < 0.1 else 'medium'
+            
+            return {
+                'category': 'top_page_content',
+                'title': f"🔍 Analyse contenu : {page_path}",
+                'message': message,
+                'priority': priority,
+                'priority_score': 3 if priority == 'high' else 2
+            }
+        except Exception as e:
+            print(f"Erreur analyse page {page_url}: {e}")
+            return None
+    
+    def analyze_top_pages(self):
+        """Analyse le contenu des top pages et génère des conseils personnalisés."""
+        if not self.top_pages_data or not self.site_url:
+            return []
+        
+        recommendations = []
+        base_url = self.site_url.rstrip('/')
+        for page in self.top_pages_data[:5]:  # Top 5
+            path = page.get('path', '')
+            if not path:
+                continue
+            if path == '/':
+                page_url = base_url + '/'
+            else:
+                page_url = base_url + path
+            rec = self.analyze_single_page(page_url, path)
+            if rec:
+                recommendations.append(rec)
+        return recommendations
+    
     def analyze(self):
-        """Analyse complète sans conditions"""
+        """Analyse complète avec NLP et top pages"""
         print(f"🧠 Agent SEO: Analyse de {self.site_url}")
         
-        # 1. Analyse du contenu
+        # 1. Analyse du contenu (basique + NLP)
         content_analysis = self.analyze_content_vector()
+        semantic_analysis = self.analyze_semantic_content()
         
         # 2. Analyse des performances
         performance_analysis = self.analyze_performance_stats()
         
         # 3. Analyse SEO
         seo_analysis = self.analyze_seo_correlations()
+        
+        # 4. Analyse des top pages (analyse de contenu)
+        top_pages_analysis = self.analyze_top_pages()
         
         # Stocker les métriques
         self.avg_ctr = seo_analysis.get('avg_ctr', 0)
@@ -234,7 +380,7 @@ class SmartSEOAgent:
         self.text_length = content_analysis.get('text_length', 0)
         self.internal_links = content_analysis.get('internal_links', 0)
         
-        # 4. Détection du secteur
+        # 5. Détection du secteur
         try:
             response = requests.get(self.site_url, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -245,7 +391,7 @@ class SmartSEOAgent:
         
         print(f"📊 Secteur: {INDUSTRY_BENCHMARKS.get(self.industry, INDUSTRY_BENCHMARKS['default'])['name']}")
         
-        # 5. Analyse PageSpeed
+        # 6. Analyse PageSpeed
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -255,13 +401,17 @@ class SmartSEOAgent:
         except:
             pagespeed_issues = []
         
-        # 6. Génération des scores
+        # 7. Génération des scores
         self.generate_scores(content_analysis, performance_analysis, seo_analysis, self.industry)
         
-        # 7. Génération des recommandations
+        # 8. Génération des recommandations (basiques + sémantiques + top pages)
         self.generate_recommendations()
+        for rec in semantic_analysis:
+            self.recommendations.append(rec)
+        for rec in top_pages_analysis:
+            self.recommendations.append(rec)
         
-        # 8. Ajout des issues PageSpeed
+        # 9. Ajout des issues PageSpeed
         for issue in pagespeed_issues:
             self.recommendations.append({
                 'category': issue['category'],
@@ -273,6 +423,127 @@ class SmartSEOAgent:
             })
         
         return self.recommendations
+    
+    def analyze_semantic_content(self):
+        """Analyse sémantique du contenu avec NLP"""
+        if not self.nlp:
+            return []
+        
+        recommendations = []
+        try:
+            # Récupérer le texte complet de la page
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(self.site_url, timeout=15, headers=headers)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Supprimer les balises script/style
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text()
+            
+            # Nettoyer le texte
+            lines = (line.strip() for line in text.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            clean_text = ' '.join(chunk for chunk in chunks if chunk)
+            
+            if not clean_text:
+                return recommendations
+            
+            # Traitement NLP
+            doc = self.nlp(clean_text[:1000000])  # Limiter la taille
+            
+            # 1. Lemmatisation et suppression des stopwords
+            tokens = [token.lemma_.lower() for token in doc if not token.is_stop and not token.is_punct and token.is_alpha]
+            unique_lemmas = set(tokens)
+            
+            # 2. Extraire les entités nommées (organisations, lieux, personnes)
+            entities = {}
+            for ent in doc.ents:
+                if ent.label_ not in entities:
+                    entities[ent.label_] = []
+                if ent.text not in entities[ent.label_]:
+                    entities[ent.label_].append(ent.text)
+            
+            if entities.get('ORG'):
+                orgs = ', '.join(entities['ORG'][:3])
+                recommendations.append({
+                    'category': 'semantic',
+                    'title': '🏢 Sujets connexes détectés',
+                    'message': f"Organisations mentionnées : {orgs}. Enrichissez votre contenu sur ces thèmes.",
+                    'priority': 'low',
+                    'priority_score': 1
+                })
+            if entities.get('LOC'):
+                locs = ', '.join(entities['LOC'][:3])
+                recommendations.append({
+                    'category': 'semantic',
+                    'title': '📍 Optimisation locale',
+                    'message': f"Lieux mentionnés : {locs}. Renforcez le SEO local.",
+                    'priority': 'medium',
+                    'priority_score': 2
+                })
+            
+            # 3. Similarité avec les mots-clés principaux (ex: depuis les données GSC)
+            main_keywords = []
+            if self.gsc_data:
+                main_keywords = [kw['keyword'] for kw in self.gsc_data[:3] if kw.get('keyword')]
+            if not main_keywords:
+                main_keywords = [self.site_url.split('/')[-1].replace('-', ' ')]
+            
+            # Vectorisation et similarité
+            vectorizer = TfidfVectorizer()
+            # Texte complet de la page
+            page_vector = vectorizer.fit_transform([clean_text])
+            
+            for kw in main_keywords:
+                kw_clean = ' '.join([token.lemma_.lower() for token in self.nlp(kw) if not token.is_stop])
+                if kw_clean:
+                    kw_vector = vectorizer.transform([kw_clean])
+                    similarity = cosine_similarity(page_vector, kw_vector)[0][0]
+                    if similarity < 0.1:
+                        recommendations.append({
+                            'category': 'semantic',
+                            'title': '📝 Pertinence sémantique',
+                            'message': f"⚠️ Très faible similarité avec le mot-clé '{kw}'. Enrichissez votre contenu.",
+                            'priority': 'high',
+                            'priority_score': 3
+                        })
+                    elif similarity < 0.3:
+                        recommendations.append({
+                            'category': 'semantic',
+                            'title': '📝 Pertinence sémantique',
+                            'message': f"📌 Similarité moyenne avec '{kw}'. Ajoutez des termes connexes.",
+                            'priority': 'medium',
+                            'priority_score': 2
+                        })
+                    else:
+                        recommendations.append({
+                            'category': 'semantic',
+                            'title': '📝 Pertinence sémantique',
+                            'message': f"✅ Bonne pertinence pour '{kw}'.",
+                            'priority': 'low',
+                            'priority_score': 1
+                        })
+            
+            # 4. Nombre de mots uniques (richesse lexicale)
+            if len(tokens) > 0:
+                lexical_richness = len(unique_lemmas) / len(tokens)
+                if lexical_richness < 0.3:
+                    recommendations.append({
+                        'category': 'semantic',
+                        'title': '📖 Richesse lexicale',
+                        'message': "Vocabulaire limité. Utilisez des synonymes et termes variés.",
+                        'priority': 'medium',
+                        'priority_score': 2
+                    })
+            
+        except Exception as e:
+            print(f"❌ Erreur analyse NLP: {e}")
+        
+        return recommendations
     
     def analyze_content_vector(self):
         """Vectorise le contenu et calcule les métriques - VERSION ROBUSTE AVEC DEBUG"""
@@ -924,8 +1195,8 @@ class SmartSEOAgent:
             })
 
 
-def get_smart_seo_recommendations(site_url, ga_data=None, gsc_data=None):
+def get_smart_seo_recommendations(site_url, ga_data=None, gsc_data=None, top_pages_data=None):
     """Fonction principale pour obtenir les recommandations SEO intelligentes"""
-    agent = SmartSEOAgent(site_url, ga_data, gsc_data)
+    agent = SmartSEOAgent(site_url, ga_data, gsc_data, top_pages_data)
     recommendations = agent.analyze()
     return recommendations
