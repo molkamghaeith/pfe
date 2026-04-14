@@ -19,7 +19,7 @@ from .serializers import WebsiteSerializer
 from accounts.models import GoogleAnalyticsToken
 from urllib.parse import urlparse
 from datetime import date, timedelta
-from .seo_agent import get_seo_recommendations
+from .smart_seo_agent import get_smart_seo_recommendations  # ✅ NOUVEL AGENT INTELLIGENT
 from .models import Website, Analysis
 
 
@@ -300,11 +300,12 @@ def get_search_console_data(request):
     return JsonResponse(results, safe=False)
 
 
-# ================= RECOMMANDATIONS SEO =================
+# ================= RECOMMANDATIONS SEO (NOUVEL AGENT INTELLIGENT) =================
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_seo_recommendations_api(request, website_id):
+    """API pour obtenir les recommandations SEO avec l'agent intelligent"""
     try:
         website = Website.objects.get(id=website_id, user=request.user)
     except Website.DoesNotExist:
@@ -313,15 +314,17 @@ def get_seo_recommendations_api(request, website_id):
     ga_data = []
     gsc_data = []
     
+    # Récupérer les données GA
     analyses = Analysis.objects.filter(website=website).order_by('-date_analyse')[:30]
     for analysis in analyses:
         ga_data.append({
             'users': analysis.trafic,
             'sessions': analysis.clics,
-            'bounceRate': 0
+            'views': analysis.impressions,
         })
     
-    recommendations = get_seo_recommendations(website.url, ga_data, gsc_data)
+    # Utiliser le nouvel agent intelligent (sans if/else)
+    recommendations = get_smart_seo_recommendations(website.url, ga_data, gsc_data)
     
     return Response(recommendations)
 
@@ -402,7 +405,7 @@ def export_analytics_csv(request, website_id):
     end_date = date.today()
     start_date = end_date - timedelta(days=30)
     start_date_str = start_date.strftime("%Y-%m-%d")
-    end_date_str = end_date.strftime("%Y-%m-%d")
+    end_date_str = end_date.strftime("%Y-m-%d")
     
     credentials = Credentials(token=token_obj.access_token)
     service = build("analyticsdata", "v1beta", credentials=credentials)
